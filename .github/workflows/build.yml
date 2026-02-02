@@ -1,1 +1,142 @@
+name: Build Plugin
 
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ created ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build Plugin (Windows)
+        run: |
+          cl /c /std:c++17 /O2 /MD /EHsc /I.\SDK /I. TDAnimation.cpp /FoTDAnimation.obj
+          cl /c /std:c++17 /O2 /MD /EHsc /I.\SDK /I. main.cpp /Fomain.obj
+          link /DLL /OUT:td_animation.dll TDAnimation.obj main.obj
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: td_animation-windows
+          path: td_animation.dll
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-20.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib zip
+
+      - name: Build Plugin (Linux)
+        run: |
+          g++ -c -std=c++17 -m32 -fPIC -O3 -I./SDK -I. TDAnimation.cpp -o TDAnimation.o
+          g++ -c -std=c++17 -m32 -fPIC -O3 -I./SDK -I. main.cpp -o main.o
+          g++ -m32 -shared -fPIC -pthread -o td_animation.so TDAnimation.o main.o
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: td_animation-linux
+          path: td_animation.so
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: td_animation-windows
+          path: windows
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: td_animation-linux
+          path: linux
+
+      - name: Copy include file
+        run: |
+          cp td_animation_plugin.inc windows/
+          cp td_animation_plugin.inc linux/
+
+      - name: Create ZIP packages
+        run: |
+          cd windows && zip -r ../td_animation-windows.zip * && cd ..
+          cd linux && zip -r ../td_animation-linux.zip * && cd ..
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            td_animation-windows.zip
+            td_animation-linux.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-artifacts:
+    name: Upload Build Artifacts
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: td_animation-windows
+          path: artifacts/windows
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: td_animation-linux
+          path: artifacts/linux
+
+      - name: Copy include file
+        run: cp td_animation_plugin.inc artifacts/
+
+      - name: Create release package
+        run: |
+          cd artifacts
+          zip -r td_animation-release.zip windows linux td_animation_plugin.inc
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: td_animation-complete
+          path: artifacts/td_animation-release.zip
+          retention-days: 30
